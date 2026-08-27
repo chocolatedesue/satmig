@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>satmig -- formal model</title>
+<style>
+ body{font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+   max-width:1080px;margin:0 auto;padding:2rem 1.25rem;color:#0f172a}
+ h1{font-size:1.7rem;border-bottom:2px solid #e2e8f0;padding-bottom:.4rem}
+ h2{font-size:1.2rem;margin-top:2.2rem;color:#1e3a8a}
+ table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:13px}
+ th,td{border:1px solid #dbe3ec;padding:.4rem .55rem;text-align:right}
+ th:first-child,td:first-child{text-align:left}
+ th{background:#f1f5f9}
+ tr:nth-child(even) td{background:#fafcff}
+ img{max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:6px;margin:.6rem 0}
+ code{background:#f1f5f9;padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ strong{color:#0f172a}
+</style></head><body>
+<p style="margin:0 0 1.5rem 0;padding:.6rem .8rem;background:#f1f5f9;
+border-radius:6px;font-size:14px">
+<a href="./">Results report</a> &middot;
+<a href="proposals.html">Four proposals</a> &middot;
+<a href="model.html">Formal model</a> &middot;
+<a href="https://github.com/chocolatedesue/satmig">Source</a>
+</p>
+<h1>形式化模型</h1>
+
+<p>本文件写清仿真器实现的模型：变量、公式、每条公式的出处，以及删掉了什么。</p>
+<p>所有数值都可用 <code>python -m satmig all</code> 重算。</p>
+
+<h2>1. 星座与可用性</h2>
+
+<p>一个 Walker shell：<code>Q</code> 个轨道面 × <code>N</code> 颗星，面内成 ISL 环，面间同 slot 相连，</p>
+<p>构成 <code>(plane, slot)</code> 环面格。</p>
+
+<table>
+<tr><th>量</th><th>公式</th><th>550 km / 53° / 72×22 的值</th></tr>
+<tr><td>轨道周期</td><td><code>T = 2π√(r³/μ)</code></td><td>5730.1 s</td></tr>
+<tr><td>无蚀临界角</td><td><code>β_crit = arcsin(R/r)</code></td><td>67.004°</td></tr>
+<tr><td>蚀占比</td><td><code>f(β) = (1/π)·arccos( √(1−(R/r)²) / cos β )</code>，`</td><td>β</td><td>≥β_crit` 时为 0</td><td>β=0 → 0.3722</td></tr>
+<tr><td>面 β 角</td><td><code>sin β = cos δ_s·sin i·sin(Ω−α_s) + sin δ_s·cos i</code></td><td>−29.5°…+76.3°</td></tr>
+<tr><td>本影中心</td><td>反日向量投影到轨道面基底后的纬度论元 <code>atan2(−ŝ·q̂, −ŝ·p̂)</code></td><td>每面不同</td></tr>
+<tr><td>J2 节点漂移</td><td><code>−1.5·J2·n·(R/r)²·cos i</code></td><td>97.6° 时 +0.986°/天</td></tr>
+</table>
+
+<p>卫星 <code>k</code> 的面内相位 <code>u_k(t) = u₀ + 2πt/T + 2πk/N</code>；当它与本影中心的角距小于</p>
+<p><code>π·f</code> 时处于蚀期。可用性因此是<strong>确定性、周期、可提前一整轨解析求解</strong>的——这就是</p>
+<p>本工作相对地面 spot instance 的信息优势。</p>
+
+<p>算力代理：<code>c_i(t) = 1</code>（受照）/ <code>c_e</code>（蚀期靠电池的降额档）。<code>c_e</code> 是假设，E3 专门扫它。</p>
+
+<p><strong>独立对拍</strong>：<code>β_crit = 67.0°</code>、<code>f(0) = 0.372</code>、<code>T = 95.5 min</code>、单 shell 内 β 跨度</p>
+<p>到 <code>i + δ_s = 76.4°</code>，与 LAB-47 / LAB-58 / LAB-67 用 satellite.js + SGP4 得到的</p>
+<p>数字一致。这四条在 <code>tests/test_orbit.py</code> 里是断言。</p>
+
+<h2>2. ISL 时延</h2>
+
+<p>一跳是弦长而非弧长：<code>chord(θ) = 2r·sin(θ/2)</code>。</p>
+
+<table>
+<tr><th>方向</th><th>角距</th><th>弦长</th><th>时延</th></tr>
+<tr><td>面内（沿轨）</td><td><code>2π/N</code></td><td>1969.6 km</td><td><strong>6.571 ms</strong></td></tr>
+<tr><td>面间（跨面，赤道）</td><td><code>(2π/Q)·cos φ</code></td><td>603.7 km</td><td><strong>2.014 ms</strong></td></tr>
+</table>
+
+<p><strong>跨面一跳只有沿轨的 1/3.26</strong>（72 面 shell）。面数少时反转：12 面 shell 的跨面跳是</p>
+<p>11.98 ms，比沿轨还贵。这个比值是第 2 号方案的全部依据。</p>
+
+<h2>3. 流水线：吞吐、时延、显存</h2>
+
+<p>模型 <code>L</code> 层切成 <code>P</code> 个 stage，stage 有序 ⇒ 宿主必须构成 ISL 图上的一条<strong>路径</strong>。</p>
+
+<p>- 每 stage 服务时间 <code>t_s = L_s · t_layer / c_s</code></p>
+<p>- 1F1B 稳态吞吐 <code>R = M·b / [ (M+P−1)·max_s t_s + Σ hops ]</code></p>
+<p>  —— <code>P·M/(M+P−1)</code> 是它在均衡切分下的形状（LAB-47 用的形式）</p>
+<p>- 单序列 TPOT <code>= Σ_s t_s + Σ hops</code></p>
+
+<p><strong>关键修正：hop 预算不是 <code>P</code> 跳，是往返。</strong> 采样出的 token 必须回到 stage 0 才能</p>
+<p>走下一步。1×P 的沿轨弧上，回程不是一跳而是 <code>P−1</code> 跳，所以每 token 付</p>
+<p><code>2(P−1)</code> 个沿轨跳。LAB-47 按 <code>P</code> 跳算，低估了约 2 倍。P=10 时：</p>
+
+<p>```</p>
+<p>沿轨 1×10 :  42.0 ms 计算 + 9×6.571 前向 + 9×6.571 回程 = 160.3 ms</p>
+<p>蛇形 5×2  :  42.0 ms 计算 + (8×2.014 + 1×6.571) 前向 + 1×6.571 回程 = 71.3 ms</p>
+<p>```</p>
+
+<p><strong>偶数列的蛇形块把回程收成一跳</strong>，这是它赢的机制，不是常数调优。</p>
+
+<p>显存（PipeLive 原文公式）：</p>
+
+<p>```</p>
+<p>MaxBlocks(i, L) = ⌊ (M_i·u − L·W) / (L·P_blk) ⌋</p>
+<p>B_shrink = min_i MaxBlocks(i)          可行性判据 B_used ≤ B_shrink</p>
+<p>```</p>
+
+<p>层切分必须是堆叠因子 <code>k</code> 的整数倍（PipeLive 第 6.2 节），所以 80 层 / k=4 只有</p>
+<p>20 个可切单元，<code>P</code> 不整除 20 时切分不均衡、吞吐低于闭式值（<code>tests/test_perf.py</code></p>
+<p>里有这条的断言）。</p>
+
+<p>24 GB 可用显存 × 0.9 下，<code>140 + 42.9 = 182.9 GB</code> 的模型要求 <strong>P ≥ 10</strong>。这是硬下界。</p>
+
+<h2>4. 迁移代价</h2>
+
+<table>
+<tr><th>机制</th><th>公式 / 常数</th><th>出处</th></tr>
+<tr><td>触发时刻</td><td><code>T_start = min_i{ T_leave,i − ( Σ Size/B_ISL + T_ack + T_buffer ) }</code></td><td>SCOPE Eq. 3</td></tr>
+<tr><td>迁移优先级</td><td><code>V_c = λ_c / Size(c)</code></td><td>SCOPE Eq. 2</td></tr>
+<tr><td>协作可达</td><td><code>D(u,v) ≤ min(τ, D_ground(t))</code></td><td>SCOPE Eq. 1</td></tr>
+<tr><td>增量 KV 补丁</td><td>脏集几何收敛，直到 <code>T_sched − T_applied &lt; τ</code></td><td>PipeLive 6.3</td></tr>
+<tr><td>切换</td><td>11.1 ms（纪元路由，pair-local）/ 555 ms（全局重建，约 50×）</td><td>CONNEX</td></tr>
+<tr><td>目标映射</td><td>加权二分图最大匹配（KM），边权=权重复用度</td><td>SpotServe Device Mapper</td></tr>
+<tr><td>不迁移的代价</td><td><code>Loss = T_requeue + T_recompute</code></td><td>Llumnix</td></tr>
+<tr><td>空闲度</td><td><code>F = (M − ΣV)/B</code> → 我们换成 <code>F_energy = t_到蚀期 + E_bat/P_cmp</code></td><td>Llumnix 4.4.3</td></tr>
+</table>
+
+<p>我们把 <code>T_leave</code>（离开服务区）换成 <code>T_eclipse_entry</code>（离开供能集合），把内容缓存</p>
+<p>换成 stage 的 KV + 未驻留的权重分片。权重只读，走后台低优先级流，不占关键路径。</p>
+
+<p>一次 stage 交接（P=10、KV 4.29 GB、100 Gbps）：</p>
+
+<p>```</p>
+<p>stop-and-copy KV     : 368 ms 传输 + 20 ack + 11.1 cutover = 399 ms</p>
+<p>增量补丁（2 轮收敛）  : 残余 0.007 ms + 20 ack + 11.1 cutover = 31.1 ms   ← 12.8×</p>
+<p>```</p>
+
+<p>ISL 争用按每 slot max-min 公平：一条流在被 <code>n</code> 条流共享的链路上拿 <code>B/n</code>。</p>
+<p>一次 <code>J</code> 跳的批量跳会把 <code>P</code> 份 KV 复用到同样的 <code>J</code> 条链路上，所以有效带宽退化到</p>
+<p><code>B/min(J,P)</code>——<strong>批量化不是免费的</strong>，跳距必须对着链路速率选（见 E6）。</p>
+
+<h2>5. 删掉了什么（以及后果方向）</h2>
+
+<table>
+<tr><th>删掉</th><th>后果</th><th>方向</th></tr>
+<tr><td>姿态 / 帆板入射角</td><td>无功率时间被低估约 15 个百分点（LAB-67 实测）</td><td><strong>高估我们的成绩</strong>，需注意</td></tr>
+<tr><td>电池 SoC 动态（<code>c_e</code> 当常数）</td><td>"扛过去 vs 搬走"不是跨时段权衡</td><td>E3 用扫参覆盖</td></tr>
+<tr><td>半影</td><td>10–160 s 的瞬态不出现</td><td>影响很小</td></tr>
+<tr><td>地球扁率、大气阻力、位保机动</td><td>长期相位漂移</td><td>3 轨窗口内可忽略</td></tr>
+<tr><td>prefill/decode 混合、请求到达过程</td><td>只报稳态 decode</td><td>不报 TTFT</td></tr>
+<tr><td>slot 内排队动态</td><td>交接在其起始 slot 内定价</td><td>10 s slot ≫ 0.4 s 交接</td></tr>
+<tr><td>星地链路 / 用户侧</td><td>只做星上放置</td><td>与 SCOPE 的分工</td></tr>
+</table>
+
+<p>第一条最重要：<strong>本文所有"无功率"数字都只算几何蚀期，是下界。</strong> 把姿态放回来会让</p>
+<p>静态放置更差、迁移收益更大，所以本文的结论方向是保守的。</p>
+</body></html>

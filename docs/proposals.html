@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>satmig -- four proposals</title>
+<style>
+ body{font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+   max-width:1080px;margin:0 auto;padding:2rem 1.25rem;color:#0f172a}
+ h1{font-size:1.7rem;border-bottom:2px solid #e2e8f0;padding-bottom:.4rem}
+ h2{font-size:1.2rem;margin-top:2.2rem;color:#1e3a8a}
+ table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:13px}
+ th,td{border:1px solid #dbe3ec;padding:.4rem .55rem;text-align:right}
+ th:first-child,td:first-child{text-align:left}
+ th{background:#f1f5f9}
+ tr:nth-child(even) td{background:#fafcff}
+ img{max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:6px;margin:.6rem 0}
+ code{background:#f1f5f9;padding:.1rem .3rem;border-radius:3px;font-size:.9em}
+ strong{color:#0f172a}
+</style></head><body>
+<p style="margin:0 0 1.5rem 0;padding:.6rem .8rem;background:#f1f5f9;
+border-radius:6px;font-size:14px">
+<a href="./">Results report</a> &middot;
+<a href="proposals.html">Four proposals</a> &middot;
+<a href="model.html">Formal model</a> &middot;
+<a href="https://github.com/chocolatedesue/satmig">Source</a>
+</p>
+<h1>四个方案</h1>
+
+<p>每个方案按要求写成三段：<strong>场景 / 谁 / 什么约束 / 做不到什么</strong> → **已有做法 X 因为哪个</p>
+<p>假设不成立而失效<strong> → </strong>我提出 Y，在某指标上相比 X 改善多少**。</p>
+
+<p>所有"改善多少"都是 <code>python -m satmig all</code> 的输出，配置与产物在 <code>configs/</code> 与</p>
+<p><code>results/</code>。基线一律是 <code>conveyor</code>（LAB-47 的 baseline），除非另注。</p>
+
+<p>---</p>
+
+<h2>方案 1：EPH —— 用确定性蚀期预报把交接从"周期盲搬"变成"截止期驱动的批量跳"</h2>
+
+<h3>场景 / 谁 / 约束 / 做不到什么</h3>
+
+<p>一个 LEO shell 的单轨道面上跑一条 <code>P</code> 段流水线的 LLM 推理服务。<strong>编排器</strong>知道每颗星</p>
+<p>的蚀期时刻表（轨道几何决定，可提前一整年算出），但**受制于"stage 有序 ⇒ 宿主必须</p>
+<p>构成 ISL 图上一条连续路径"<strong>，它</strong>做不到**把单个 stage 从光照弧末端拎到弧首——那会</p>
+<p>把链拆开。于是它只能整块平移，而整块平移的次数直接决定了切换停顿的总量。</p>
+
+<h3>已有做法 X 及其失效的假设</h3>
+
+<p>- <strong>X₁ = SpotServe 的中断协调器</strong>：假设抢占<strong>不可预报</strong>，所以只有 30 s 宽限期，</p>
+<p>  只能 JIT 地搬。卫星上宽限期是 3050 s 量级（LAB-67 实测 p50），把它当 30 s 用</p>
+<p>  等于扔掉四个数量级的提前量；更要紧的是"不可预报"意味着权重无法预铺，于是每次</p>
+<p>  交接都要搬 14 GB 权重并做一次全局通信组重建。</p>
+<p>- <strong>X₂ = LAB-47 的 conveyor</strong>：假设"每 <code>T/N</code> 必须平移一跳"。但这只在光照弧刚好装满</p>
+<p>  流水线时才是必须的。弧宽 13.8 而 <code>P=10</code> 时有 3.8 格余量，这些余量被白扔了。</p>
+
+<h3>我提出 Y</h3>
+
+<p><code>eph</code>：(a) 触发时刻按 <strong>SCOPE Eq. 3</strong> 从蚀期入口反推；(b) 跳距取<strong>弧余量</strong>，一次跳</p>
+<p><code>slack+1</code> 格，用一次 cutover 换掉 <code>slack+1</code> 次；(c) K 条流水线的触发阈值按</p>
+<p><code>k·(T/N)/K</code> 错相；(d) 权重后台预铺、只搬 KV，走 <strong>PipeLive 增量补丁</strong>（脏集几何收敛）</p>
+<p>+ <strong>CONNEX 纪元路由</strong>的 pair-local cutover；(e) 跳距对链路速率求解，见方案 4 的 E6。</p>
+
+<h3>改善多少（base 配置，K=1，P=10，3 轨）</h3>
+
+<table>
+<tr><th>指标</th><th>conveyor</th><th>reactive JIT</th><th><strong>eph</strong></th><th>改善</th></tr>
+<tr><td>交接事件 / 小时</td><td>13.6</td><td>13.0</td><td><strong>2.7</strong></td><td><strong>−80.0%</strong></td></tr>
+<tr><td>交接停顿占比</td><td>1.511%</td><td>4.872%</td><td><strong>0.0242%</strong></td><td><strong>−98.4%</strong>（对 JIT 是 −99.5%）</td></tr>
+<tr><td>每小时搬运字节</td><td>584 GB</td><td>1173 GB</td><td><strong>117 GB</strong></td><td><strong>−80.0%</strong></td></tr>
+<tr><td>平均吞吐</td><td>108.5</td><td>106.3</td><td><strong>110.1</strong> tok/s</td><td>+1.5%</td></tr>
+<tr><td>全 stage 受照占比</td><td>1.000</td><td>1.000</td><td><strong>1.000</strong></td><td>持平</td></tr>
+</table>
+
+<p><strong>读法</strong>：吞吐几乎不动（三者都能把 stage 保持在光照里），赢的是<strong>开销</strong>：事件数 5.0×</p>
+<p>更少、停顿 62× 更小。停顿的 12.8× 来自增量补丁替掉 KV 的 stop-and-copy</p>
+<p>（399 ms → 31.1 ms / stage），5.0× 来自弧余量批量化，两者相乘。</p>
+
+<p><strong>边界</strong>：<code>eph</code> 只在自己的面内滑动。当同面还有别的流水线占着落点时它会被卡住——</p>
+<p>E2 里 K≥2 时它反而输给 conveyor（546 vs 670 tok/s，K=8）。这不是调参问题，是方案 3</p>
+<p>存在的理由。</p>
+
+<p>---</p>
+
+<h2>方案 2：紧凑蛇形嵌入 —— 沿轨链在交互式时延预算下根本不可行</h2>
+
+<h3>场景 / 谁 / 约束 / 做不到什么</h3>
+
+<p>同一个 shell 上服务<strong>交互式</strong> LLM 推理（TPOT SLO 80–100 ms）。<strong>服务提供方</strong>受制于</p>
+<p>两条同时成立的硬约束：星上显存 24 GB ⇒ 182.9 GB 的模型<strong>至少要切 10 段</strong>；单跳沿轨</p>
+<p>ISL 传播 6.571 ms 且回程也要走 <code>P−1</code> 跳 ⇒ 时延随 <code>P</code> 线性涨。它<strong>做不到</strong>同时满足</p>
+<p>这两条——<strong>可行域是空的</strong>。</p>
+
+<h3>已有做法 X 及其失效的假设</h3>
+
+<p><strong>X = 把流水线摆成一串 ISL 邻居（1×P 沿轨弧）</strong>。这是地面 PP 的默认几何（机内/机架内</p>
+<p>邻居间时延同质），也是 LAB-47 的模型。失效的假设有两条：</p>
+
+<p>1. <strong>"stage 间一跳的代价与方向无关"</strong>。在 72 面 shell 上跨面一跳只有 2.014 ms，</p>
+<p>   是沿轨的 <strong>1/3.26</strong>。地面上没有这个各向异性，所以没人建模它。</p>
+<p>2. <strong>"回程是一跳"</strong>。LAB-47 按 <code>P</code> 跳算 TPOT。实际上采样 token 要回到 stage 0，</p>
+<p>   开放弧上回程是 <code>P−1</code> 跳，所以是 <code>2(P−1)</code> 跳。这一条把 LAB-47 的时延低估了约 2 倍。</p>
+
+<p>后果（E4，可直接读表）：</p>
+
+<table>
+<tr><th>TPOT SLO</th><th>1×P 沿轨弧允许的 P</th><th>蛇形块允许的 P</th><th>显存下界</th><th>沿轨可行？</th><th>蛇形可行？</th></tr>
+<tr><td>50 ms</td><td>1</td><td>2</td><td>10</td><td>✗</td><td>✗</td></tr>
+<tr><td>70 ms</td><td>3</td><td>5</td><td>10</td><td>✗</td><td>✗</td></tr>
+<tr><td><strong>80 ms</strong></td><td>3</td><td><strong>10</strong></td><td>10</td><td>✗</td><td><strong>✓</strong></td></tr>
+<tr><td>100 ms</td><td>5</td><td>14</td><td>10</td><td>✗</td><td>✓</td></tr>
+<tr><td>160 ms</td><td>9</td><td>30</td><td>10</td><td>✗</td><td>✓</td></tr>
+<tr><td>220 ms</td><td>22</td><td>43</td><td>10</td><td>✓</td><td>✓</td></tr>
+</table>
+
+<h3>我提出 Y</h3>
+
+<p><code>eph_compact</code>：把 stage 链嵌成 <strong><code>w × ⌈P/w⌉</code> 的蛇形（boustrophedon）块</strong>——列内走</p>
+<p>便宜的跨面跳，只在换列时付一次沿轨跳。并且<strong>取偶数列</strong>，这样最后一个 stage 落在第一个</p>
+<p>旁边，<strong>回程收成一跳</strong>。这不是常数优化，是把"有序链占连续弧"这条拓扑约束从一维推广</p>
+<p>到二维后自然出现的最优形状。</p>
+
+<h3>改善多少</h3>
+
+<table>
+<tr><th>指标</th><th>conveyor（1×10 沿轨）</th><th><strong>eph_compact（5×2 蛇形）</strong></th><th>改善</th></tr>
+<tr><td>TPOT</td><td>160.3 ms</td><td><strong>71.3 ms</strong></td><td><strong>−55.5%</strong></td></tr>
+<tr><td>平均吞吐</td><td>108.5 tok/s</td><td><strong>157.8 tok/s</strong></td><td><strong>1.45×</strong></td></tr>
+<tr><td>SLO(100 ms) 达成率</td><td>0.000</td><td><strong>0.992</strong></td><td>0 → 99.2%</td></tr>
+<tr><td>最低可行 TPOT SLO</td><td>220 ms</td><td><strong>80 ms</strong></td><td><strong>2.75× 更松的预算</strong></td></tr>
+</table>
+
+<p><strong>最重要的一条不是倍数，是可行性</strong>：在 80–160 ms 这个交互式区间里，沿轨放置**没有</p>
+<p>任何可行的 P**（显存要 ≥10，时延只给 3–9），蛇形放置把可行窗口开到 <code>P ∈ [10, 30]</code>。</p>
+
+<p><strong>代价</strong>：蛇形块跨 <code>w</code> 个轨道面，而各面 β 不同 ⇒ 蚀期时刻不同步，光照弧不再是一个</p>
+<p>共同平移的整体。这就是方案 4 里"按面<strong>带</strong>而不是按单面排序"的由来。</p>
+
+<p>---</p>
+
+<h2>方案 3：能源空闲度 + 跨面重定位 —— 多流水线争用不是带宽问题，是光照弧占用问题</h2>
+
+<h3>场景 / 谁 / 约束 / 做不到什么</h3>
+
+<p>热点服务区上空（SCOPE 的设定）只有少数几个轨道面可用，<code>K</code> 条流水线<strong>多租户</strong>共享它们。</p>
+<p><strong>调度器</strong>受制于"每颗星只是一个加速器"（两个 stage 共址就互相砍半算力，且显存本来</p>
+<p>就装不下），它<strong>做不到</strong>在 <code>Σ P_k</code> 超过这几个面的光照弧总容量时还保持性能——而它也</p>
+<p>不知道该先让谁走。</p>
+
+<h3>已有做法 X 及其失效的假设</h3>
+
+<p>- <strong>X₁ = Llumnix 的空闲度调度</strong>：<code>F = (M − ΣV)/B</code>，<strong>观测</strong>到空闲度变差才迁。卫星上</p>
+<p>  "观测到算力掉了"意味着宿主<strong>已经进本影了</strong>——正是 Llumnix 自己要消除的 preemption</p>
+<p>  loss，被反应式触发重新引入。</p>
+<p>- <strong>X₂ = LAB-47 的猜测</strong>："K 条流水线的交接时刻天然对齐 ⇒ 迁移风暴"。<strong>这条不成立</strong>：</p>
+<p>  单跳 lockstep 平移里每个 stage 走各自独立的链路，6 条流用 6 条不同的链，100 Gbps 下</p>
+<p>  峰值链路流数恒为 2（E2 实测），ISL 从不饱和。</p>
+<p>- <strong>X₃ = <code>eph</code>（方案 1）</strong>：面内批量跳在同面有邻居时找不到落点，退化到不动 ⇒ stage</p>
+<p>  被留在暗区。</p>
+
+<h3>我提出 Y</h3>
+
+<p><code>eph_freeness</code>：(a) 把 Llumnix 的显存空闲度换成<strong>可预测的能源空闲度</strong></p>
+<p><code>F_energy = t_到蚀期 + E_bat/P_cmp</code>——卫星上这个量是解析已知的，不需要观测；</p>
+<p>(b) 落点候选扩展到<strong>相邻轨道面</strong>，按 <code>F_energy</code> 最大、搬运字节最小挑；</p>
+<p>(c) 落点内的 stage→宿主映射用 <strong>SpotServe 的 KM 二分图匹配</strong>，让已驻留权重的星继续</p>
+<p>拿同一个 stage；(d) 准入顺序按 <strong>SCOPE Eq. 2 的价值密度</strong>。</p>
+
+<h3>改善多少（E2：热点区 2 个面，P=6）</h3>
+
+<table>
+<tr><th>K</th><th>static</th><th>reactive JIT</th><th>conveyor</th><th><strong>eph_freeness</strong></th><th>vs conveyor</th></tr>
+<tr><td>1</td><td>53.3</td><td>82.7</td><td>83.8</td><td><strong>96.4</strong></td><td>1.15×</td></tr>
+<tr><td>2</td><td>106.7</td><td>165.5</td><td>167.5</td><td><strong>192.7</strong></td><td>1.15×</td></tr>
+<tr><td>4</td><td>213.3</td><td>198.0</td><td>335.0</td><td><strong>385.2</strong></td><td>1.15×</td></tr>
+<tr><td>6</td><td>320.1</td><td>205.1</td><td>386.3</td><td><strong>577.5</strong></td><td><strong>1.50×</strong></td></tr>
+<tr><td>8</td><td>351.2</td><td>207.3</td><td>348.8</td><td><strong>770.3</strong></td><td><strong>2.21×</strong></td></tr>
+</table>
+
+<p>（聚合吞吐 tok/s。）<strong>conveyor 在 K=6 之后开始掉头</strong>（386 → 349），因为它无处可去，</p>
+<p>只能让 16.7% 的 stage 共址；反应式基线在 K≥3 就饱和在 ~205 tok/s，共址率约 0.90。</p>
+<p><code>eph_freeness</code> 到 K=8 仍线性，共址率恒为 <strong>0</strong>。</p>
+
+<p><strong>顺带纠正 LAB-47 的一个猜测</strong>：多流水线的瓶颈<strong>不是</strong> ISL 带宽（峰值链路流数恒为 2，</p>
+<p>100 Gbps 下毫无压力），而是<strong>光照弧的占用</strong>。这改变了后续工作该优化什么。</p>
+
+<p>---</p>
+
+<h2>方案 4：双时间尺度 —— 面选择是周级慢变量，而"免费的面"是季节性的</h2>
+
+<h3>场景 / 谁 / 约束 / 做不到什么</h3>
+
+<p>星座运营方要为长期负载<strong>规划</strong>放置。它受制于"β 角以 66 天为周期慢变"（LAB-67），</p>
+<p><strong>做不到</strong>用逐 slot 重优化来利用面间异质性——那会把一个周级决策以秒级频率反复推翻，</p>
+<p>churn 掉所有收益。</p>
+
+<h3>已有做法 X 及其失效的假设</h3>
+
+<p>- <strong>X = 连续再平衡</strong>（Llumnix / AlpaServe 一路）：假设资源池<strong>同质</strong>，好坏只由当前</p>
+<p>  负载决定。卫星上不成立：同一 shell 同一时刻，各面蚀占比从 <strong>0% 到 37.2%</strong>，而且</p>
+<p>  <strong><code>|β| &gt; 67.0°</code> 的面完全不进本影</strong>——放在那儿的流水线一次都不用迁。</p>
+<p>- <strong>X 的第二个假设</strong>："好面的集合是稳定的"。也不成立：它取决于太阳赤纬，**近至日点</p>
+<p>  才存在，近分点为零**。</p>
+
+<h3>我提出 Y</h3>
+
+<p><code>two_timescale</code>：外层按 <strong>β 角对"面带"排序</strong>（不是单面——紧凑块跨 <code>w</code> 个面，必须按</p>
+<p>带内最差成员排，否则最好的面被摆在一个会进蚀的带边上，min 算子立刻吃掉优势），</p>
+<p>只在 β 周期尺度重规划；内层沿用 <code>eph_freeness</code>。</p>
+
+<h3>改善多少</h3>
+
+<p>base 配置（至日点，72 面里有 8 个无蚀面）：</p>
+
+<table>
+<tr><th>指标</th><th>conveyor</th><th>eph_freeness</th><th><strong>two_timescale</strong></th></tr>
+<tr><td>交接事件 / 小时</td><td>13.6</td><td>3.8</td><td><strong>0.0</strong></td></tr>
+<tr><td>交接停顿</td><td>1.511%</td><td>0.033%</td><td><strong>0</strong></td></tr>
+<tr><td>SLO 达成率</td><td>0.000</td><td>0.995</td><td><strong>1.000</strong></td></tr>
+<tr><td>吞吐</td><td>108.5</td><td>158.2</td><td><strong>158.8</strong> tok/s</td></tr>
+</table>
+
+<p>E5（历元扫描，K=2）：</p>
+
+<table>
+<tr><th>历元（J2000 起天数）</th><th>无蚀面数</th><th>conveyor 事件/h</th><th>eph_freeness</th><th><strong>two_timescale</strong></th></tr>
+<tr><td>9210（近春分）</td><td>0</td><td>13.5</td><td>0.94</td><td>1.10</td></tr>
+<tr><td>9260</td><td>6</td><td>13.5</td><td>5.34</td><td><strong>0.00</strong></td></tr>
+<tr><td>9303（近夏至）</td><td>9</td><td>13.5</td><td>2.83</td><td><strong>0.00</strong></td></tr>
+<tr><td>9330</td><td>8</td><td>13.5</td><td>3.30</td><td><strong>0.00</strong></td></tr>
+<tr><td>9360（近秋分）</td><td>0</td><td>13.5</td><td>0.94</td><td>0.94</td></tr>
+</table>
+
+<p>三条结论：</p>
+
+<p>1. <strong>近至日点可以完全不迁移</strong>（事件数 13.5/h → 0），吞吐还高 46%。</p>
+<p>2. <strong>这是季节性的</strong>：近分点无蚀面数归零，<code>two_timescale</code> 退化成 <code>eph_freeness</code>。</p>
+<p>   按一个历元标定迁移容量的规划器，在另一个历元会错 100%。</p>
+<p>3. <strong>按单面排序是个陷阱</strong>：<code>eph_freeness</code> 在无蚀面存在时反而<strong>迁得更多</strong></p>
+<p>   （9260 处 5.34/h，比分点的 0.94/h 高 5.7×），因为它把带跨在了无蚀面与重蚀面之间。</p>
+<p>   按带排序才拿得到那个 0。</p>
+
+<h3>顺带：E3 和 E6 两条"诚实性"结论</h3>
+
+<p><strong>E3（扫 <code>c_e</code>）</strong>：<code>static</code> 的吞吐从 42.3（<code>c_e=0</code>）涨到 85.0（<code>c_e=1</code>），而所有迁移</p>
+<p>策略恒定。<strong>所以整个迁移问题只在电池扛不住满功率计算时才存在</strong>——这正是 LAB-67 待办</p>
+<p>第 1 条要标定的那个数。而 <code>eph_freeness</code> 相对 conveyor 的 <strong>+13% 与 <code>c_e</code> 无关</strong>，</p>
+<p>因为它来自紧凑放置而非能源。两部分收益是可分离的。</p>
+
+<p><strong>E6（扫 ISL 速率）</strong>：单跳 lockstep 平移让每个 stage 独占整条链路，conveyor 在任何</p>
+<p>速率下都不误期。但**批量 <code>J</code> 跳会把 <code>P</code> 份 KV 复用到同样的 <code>J</code> 条链路上，有效带宽退化</p>
+<p>到 <code>B/min(J,P)</code>**——所以跳距必须对着链路速率求解（已实现）。修正后 10 Gbps 起零误期；</p>
+<p>2 Gbps 以下（此模型尺寸下）KV 活迁移在时限内不可行，必须退回重算或接受降额。</p>
+<p>**LAB-47"100 Gbps 下带宽不是瓶颈"成立，但余量是对着 ~11 s 的交接时限，不是 260 s 的</p>
+<p>跳周期。**</p>
+
+<p>---</p>
+
+<h2>汇总：四个方案各自的可测收益</h2>
+
+<table>
+<tr><th>方案</th><th>相对基线</th><th>关键指标</th><th>改善</th></tr>
+<tr><td>1 <code>eph</code></td><td>conveyor</td><td>交接停顿占比</td><td><strong>1.511% → 0.024%（−98.4%）</strong>，事件数 −80%</td></tr>
+<tr><td>2 <code>eph_compact</code></td><td>conveyor</td><td>TPOT / 最低可行 SLO</td><td><strong>160.3 → 71.3 ms（−55.5%）</strong>；220 → <strong>80 ms</strong></td></tr>
+<tr><td>3 <code>eph_freeness</code></td><td>conveyor, K=8</td><td>聚合吞吐</td><td><strong>348.8 → 770.3 tok/s（2.21×）</strong>，共址率 0.167 → 0</td></tr>
+<tr><td>4 <code>two_timescale</code></td><td>conveyor, 至日点</td><td>交接事件</td><td><strong>13.6/h → 0</strong>，SLO 0 → 1.000</td></tr>
+</table>
+</body></html>
