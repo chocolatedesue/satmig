@@ -1,0 +1,29 @@
+name: exp3_battery
+description: >
+  E3 -- how much of the gain depends on the eclipse derate c_e?  At c_e = 1 the
+  battery carries full compute and migration is pointless; at c_e = 0 a dark
+  stage kills the pipeline.  This sweep is the honesty check on every ratio we
+  report: it separates the part of the gain that comes from keeping stages in
+  sunlight (which vanishes as c_e -> 1) from the part that comes from compact
+  placement (which does not).  Single pipeline, so no contention confounds it.
+
+constellation:
+  n_planes: 72
+  n_sats_per_plane: 22
+  epoch_days_since_j2000: 9210.0
+
+workload:
+  n_pipelines: 1
+  stages: 6
+  placement: along_track
+  snake_width: 3
+  slo_tpot_ms: 100.0
+  plane_window: 1
+
+sim:
+  horizon_s: 11460.0
+  slot_s: 10.0
+  policies: [static, reactive_jit, llumnix_reactive, conveyor, eph, eph_freeness]
+
+sweep:
+  sim.c_eclipse: [0.0, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0]

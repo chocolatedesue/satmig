@@ -1,0 +1,38 @@
+name: base
+description: >
+  Single pipeline on a Starlink-like 550 km / 53 deg shell (72 planes x 22
+  sats), Llama-3-70B class model, 100 Gbps ISL.  Epoch is near a solstice, so
+  a minority of planes are eclipse-free -- that seasonality is itself a result,
+  see configs/exp5_season.yaml.
+
+constellation:
+  altitude_km: 550.0
+  inclination_deg: 53.0
+  n_planes: 72
+  n_sats_per_plane: 22
+  epoch_days_since_j2000: 9300.0   # ~2025-06-21, near northern solstice
+  cross_plane_latitude_deg: 0.0
+
+workload:
+  n_pipelines: 1
+  stages: 10
+  placement: along_track
+  snake_width: 5
+  slo_tpot_ms: 100.0
+  stacking_k: 4
+  plane_assignment: round_robin
+
+sim:
+  horizon_s: 17187.0    # 3 orbits
+  slot_s: 10.0
+  seed: 20260827
+  c_eclipse: 0.2
+  policies:
+    - static
+    - reactive_jit
+    - llumnix_reactive
+    - conveyor
+    - eph
+    - eph_compact
+    - eph_freeness
+    - two_timescale

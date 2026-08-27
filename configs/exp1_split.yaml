@@ -1,0 +1,30 @@
+name: exp1_split
+description: >
+  E1 -- where does the feasible split live?  Sweeps the number of pipeline
+  stages P for an along-track arc and for a compact snake block, at a fixed
+  100 ms TPOT budget.  The point of comparison is not throughput but
+  feasibility: memory demands P >= 10 while a 1xP arc's round-trip hop budget
+  caps P at 5.
+
+constellation:
+  altitude_km: 550.0
+  inclination_deg: 53.0
+  n_planes: 72
+  n_sats_per_plane: 22
+  epoch_days_since_j2000: 9210.0     # equinox: no plane is eclipse-free
+
+workload:
+  n_pipelines: 1
+  placement: along_track
+  snake_width: 5
+  slo_tpot_ms: 100.0
+  stacking_k: 4
+
+sim:
+  horizon_s: 11460.0
+  slot_s: 10.0
+  c_eclipse: 0.2
+  policies: [static, conveyor, eph, eph_compact]
+
+sweep:
+  workload.stages: [2, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 16, 20]

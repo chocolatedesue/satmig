@@ -1,0 +1,28 @@
+name: exp6_bandwidth
+description: >
+  E6 -- is the ISL really not the bottleneck?  LAB-47 argued that at 100 Gbps
+  bandwidth is abundant and propagation delay is the real constraint.  This
+  sweep finds the rate at which that stops being true, which is also the rate
+  below which SCOPE Eq. 3 deadlines start to be missed.
+
+constellation:
+  n_planes: 72
+  n_sats_per_plane: 22
+  epoch_days_since_j2000: 9210.0
+
+workload:
+  n_pipelines: 4
+  stages: 6
+  placement: along_track
+  snake_width: 3
+  slo_tpot_ms: 100.0
+  plane_window: 2
+
+sim:
+  horizon_s: 11460.0
+  slot_s: 10.0
+  c_eclipse: 0.2
+  policies: [conveyor, eph, eph_compact, eph_freeness]
+
+sweep:
+  migration.isl_gbps: [0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 100.0, 400.0]

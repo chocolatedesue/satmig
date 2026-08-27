@@ -1,0 +1,9 @@
+# Per-slot traces are large (~65 MB) and fully regenerable in ~25 s with
+# `python -m satmig all`.  The three small artefacts per run (manifest.json,
+# policy_metrics.csv, summary.json) and the report are committed.
+results/**/slots.csv
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
